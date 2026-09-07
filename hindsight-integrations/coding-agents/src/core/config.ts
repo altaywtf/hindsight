@@ -109,11 +109,12 @@ export interface RawConfig {
    *  page this plugin creates (the seeded taxonomy and each captured initiative):
    *    "auto-refresh" (default) — refresh after every consolidation that produced new material
    *    "cron"                   — refresh on `pageTriggerCron` only, and only when actually stale
+   *    "daily-staggered"        — once daily at a stable minute chosen for each bank/page
    *    "manual"                 — never refresh on its own; the tools and control plane still can
    *  Auto-refresh is both the most current and the most expensive: one LLM synthesis per page per
    *  consolidation, which adds up fast across auto-surveyed repos (#3506). Existing pages keep the
    *  trigger they were created with — this changes what NEW pages get. */
-  pageTriggerType?: "auto-refresh" | "cron" | "manual";
+  pageTriggerType?: "auto-refresh" | "cron" | "daily-staggered" | "manual";
   /** Schedule for `pageTriggerType: "cron"` — UTC, standard 5-field cron, e.g. "0 3 * * *". */
   pageTriggerCron?: string;
   autoSeed?: boolean; // SessionStart: auto-seed a cold repo's bank from git history (default true)
@@ -206,7 +207,7 @@ export interface Config {
   reflectBudget: "low" | "mid" | "high";
   autoReflect: boolean;
   pageRefreshEveryTurns: number;
-  pageTriggerType: "auto-refresh" | "cron" | "manual";
+  pageTriggerType: "auto-refresh" | "cron" | "daily-staggered" | "manual";
   pageTriggerCron?: string;
   autoSeed: boolean;
   seedLimit: number;
@@ -231,7 +232,10 @@ export interface Config {
  * API rejects a cron trigger with no expression, which would fail page creation outright. Fall
  * back to the default and say so — a user who wants pages to stop refreshing writes "manual".
  */
-function resolvePageTriggerType(raw: RawConfig): "auto-refresh" | "cron" | "manual" {
+function resolvePageTriggerType(
+  raw: RawConfig
+): "auto-refresh" | "cron" | "daily-staggered" | "manual" {
+  if (raw.pageTriggerType === "daily-staggered") return "daily-staggered";
   if (raw.pageTriggerType === "manual") return "manual";
   if (raw.pageTriggerType === "cron") {
     if (raw.pageTriggerCron?.trim()) return "cron";

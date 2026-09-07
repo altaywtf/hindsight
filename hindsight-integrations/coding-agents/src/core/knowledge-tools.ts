@@ -25,7 +25,7 @@ import { syncStatus } from "./status";
 import { applyBankConfig, DEFAULT_REFLECT_TOOL_TIMEOUT_MS, loadConfig } from "./config";
 import { describeError } from "./log";
 import type { RetainStamp } from "./retain-stamp";
-import type { PageTrigger } from "./missions";
+import type { PageTriggerSource } from "./missions";
 
 export interface ToolResult {
   // Index signature so this structurally satisfies the MCP SDK's CallToolResult (which carries
@@ -101,7 +101,7 @@ export function buildKnowledgeTools(
     harness?: string;
     stampFor?: () => RetainStamp;
     /** Refresh policy for a page `hindsight_capture_initiative` creates (core/missions.ts). */
-    pageTrigger?: PageTrigger;
+    pageTrigger?: PageTriggerSource;
     /** How long `hindsight_reflect` waits on the server (cfg.reflectToolTimeoutMs). Must be
      *  threaded in by every caller: left unset, the client falls back to a 120s deadline that
      *  aborts high-budget synthesis on a populated bank mid-flight (#3590). */

@@ -295,6 +295,41 @@ describe("HindsightClient.seedPages", () => {
     });
   });
 
+  it("stamps different daily schedules when seeding and preserves them on later runs", async () => {
+    const calls: any[] = [];
+    let roots: unknown[] = [];
+    stubFetchRouted(calls, [
+      {
+        match: (m, u) => m === "GET" && u.endsWith("/knowledge-base/tree"),
+        get json() {
+          return { roots };
+        },
+      },
+    ]);
+    const c = new HindsightClient({ apiUrl: "http://x", bank: "repo-a" });
+    const cfg = resolveConfig({ pageTriggerType: "daily-staggered" });
+    const pageTrigger = vi.fn((page) => buildPageTrigger(cfg, page));
+    await c.configureBank({ pageTrigger });
+    const posts = calls.filter(
+      (k) => k.method === "POST" && k.url.endsWith("/knowledge-base/pages")
+    );
+    expect(posts).toHaveLength(PAGES.length);
+    expect(new Set(posts.map((p) => p.body.trigger.refresh_cron)).size).toBeGreaterThan(1);
+    expect(pageTrigger.mock.calls.map(([page]) => page)).toEqual(
+      PAGES.map((page) => ({ bank: "repo-a", path: [page.name] }))
+    );
+    roots = posts.map((post, i) => ({
+      id: `kp-${i}`,
+      kind: "page",
+      name: post.body.name,
+      description: post.body.source_query,
+      trigger: { ...post.body.trigger, refresh_cron: "17 9 * * *" },
+    }));
+    calls.length = 0;
+    await c.seedPages(pageTrigger);
+    expect(calls.filter((k) => k.method !== "GET")).toEqual([]);
+  });
+
   // A page seeded before `tags_match` existed keeps the server's `all_strict` default, which
   // excludes the untagged shared observations these pages are meant to synthesize from. The
   // source query is unchanged on such a bank, so the trigger has to be its own drift signal.
@@ -309,7 +344,7 @@ describe("HindsightClient.seedPages", () => {
             kind: "page",
             name: p.name,
             description: p.source_query,
-            trigger: { tags_match: "all_strict" },
+            trigger: { tags_match: "all_strict", refresh_cron: "17 9 * * *" },
           })),
         },
       },
@@ -322,7 +357,7 @@ describe("HindsightClient.seedPages", () => {
     for (const patch of patches) {
       // ONLY the trigger: sending `source_query` would schedule a full rebuild of every page on
       // a bank whose question never changed.
-      expect(patch.body).toEqual({ trigger: buildPageTrigger() });
+      expect(patch.body).toEqual({ trigger: { tags_match: "all" } });
     }
   });
 
@@ -562,6 +597,36 @@ describe("HindsightClient.captureInitiative", () => {
     // The returned page id and the id the marker names must be the same (the real page node id).
     expect(item.metadata.relatedPageId).toBe(result.page_id);
     expect(item.context).toContain(`[[page:${result.page_id}]]`);
+  });
+
+  it("schedules new initiatives by bank and folder path, leaving recaptures untouched", async () => {
+    const calls: any[] = [];
+    stubFetchRouted(calls, [
+      { match: (m, u) => m === "GET" && u.endsWith("/knowledge-base/tree"), json: { roots: [] } },
+      {
+        match: (m, u) => m === "POST" && u.endsWith("/knowledge-base/folders"),
+        json: { id: "folder-abc" },
+      },
+      {
+        match: (m, u) => m === "POST" && u.endsWith("/knowledge-base/pages"),
+        json: { page_id: "pg" },
+      },
+      { match: (m, u) => m === "POST" && u.endsWith("/memories"), json: { operation_id: "op-1" } },
+    ]);
+    const c = new HindsightClient({ apiUrl: "http://x", bank: "repo-a" });
+    const cfg = resolveConfig({ pageTriggerType: "daily-staggered" });
+    const pageTrigger = vi.fn((page) => buildPageTrigger(cfg, page));
+    const args = { title: "Upload retries", summary: "Retry transient failures.", pageTrigger };
+    await c.captureInitiative(args);
+    expect(pageTrigger).toHaveBeenCalledWith({ bank: "repo-a", path: ["Initiatives", args.title] });
+    const post = calls.find((k) => k.url.endsWith("/knowledge-base/pages"));
+    expect(post.body.trigger.refresh_cron).toMatch(/^\d+ \d+ \* \* \*$/);
+    expect(post.body.trigger.refresh_after_consolidation).toBeUndefined();
+    calls.length = 0;
+    pageTrigger.mockClear();
+    await c.captureInitiative({ ...args, relatesToPageId: "pg" });
+    expect(pageTrigger).not.toHaveBeenCalled();
+    expect(calls.every((k) => k.url.endsWith("/memories"))).toBe(true);
   });
 
   it("enhancement (relatesToPageId): NO page POST; marker names the existing page id", async () => {

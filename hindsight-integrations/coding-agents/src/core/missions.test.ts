@@ -50,6 +50,29 @@ describe("buildPageTrigger", () => {
     expect(trigger.refresh_after_consolidation).toBeUndefined();
   });
 
+  it("assigns stable daily minutes across banks and pages without a configured cron", () => {
+    const cfg = resolveConfig({ pageTriggerType: "daily-staggered", pageTriggerCron: "0 3 * * *" });
+    expect(cfg.pageTriggerType).toBe("daily-staggered");
+    const page = { bank: "repo-a", path: ["Component map"] };
+    const trigger = buildPageTrigger(cfg, page);
+    expect(buildPageTrigger(cfg, page)).toEqual(trigger);
+    expect(trigger.refresh_after_consolidation).toBeUndefined();
+    expect(trigger.tags_match).toBe("all");
+    const schedules = Array.from(
+      { length: 50 },
+      (_, i) => buildPageTrigger(cfg, { bank: `repo-${i}`, path: ["Component map"] }).refresh_cron
+    );
+    expect(new Set(schedules).size).toBeGreaterThan(40);
+    for (const cron of schedules) {
+      expect(cron).toMatch(/^(?:[0-9]|[1-5][0-9]) (?:[0-9]|1[0-9]|2[0-3]) \* \* \*$/);
+    }
+    expect(buildPageTrigger(cfg, { ...page, path: ["Core concepts"] })).not.toEqual(trigger);
+    expect(buildPageTrigger(cfg, { ...page, path: ["Initiatives", "Component map"] })).not.toEqual(
+      trigger
+    );
+    expect(() => buildPageTrigger(cfg)).toThrow("requires a bank and page identity");
+  });
+
   it("stops refreshing pages on request", () => {
     const trigger = buildPageTrigger(resolveConfig({ pageTriggerType: "manual" }));
     expect(trigger.refresh_after_consolidation).toBe(false);
@@ -90,7 +113,7 @@ describe("page trigger config resolution", () => {
     );
   });
 
-  it("ignores a value that is not one of the three types", () => {
+  it("ignores a value that is not a supported type", () => {
     expect(resolveConfig({ pageTriggerType: "whenever" as never }).pageTriggerType).toBe(
       "auto-refresh"
     );

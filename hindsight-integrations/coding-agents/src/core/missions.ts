@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /**
  * Harness-agnostic Hindsight missions, retain strategies, and knowledge-page taxonomy.
  *
@@ -292,6 +294,14 @@ export interface PageTrigger {
   refresh_cron?: string;
 }
 
+/** Creation identity is available before the server assigns a page id. */
+export interface PageIdentity {
+  bank: string;
+  path: string[];
+}
+
+export type PageTriggerSource = PageTrigger | ((page: PageIdentity) => PageTrigger);
+
 /**
  * `all` — AND over the page's tier tag, but INCLUDING untagged memories.
  *
@@ -314,7 +324,7 @@ export const PAGE_FACT_TYPES = ["world", "experience", "observation"];
 
 /** The config fields that shape the trigger (a subset of Config — see core/config.ts). */
 export interface PageTriggerConfig {
-  pageTriggerType?: "auto-refresh" | "cron" | "manual";
+  pageTriggerType?: "auto-refresh" | "cron" | "daily-staggered" | "manual";
   pageTriggerCron?: string;
 }
 
@@ -342,9 +352,20 @@ export interface PageTriggerConfig {
  * `refresh_after_consolidation` and `refresh_cron` are mutually exclusive server-side, so exactly
  * one of them is ever set here.
  */
-export function buildPageTrigger(cfg: PageTriggerConfig = {}): PageTrigger {
+export function buildPageTrigger(cfg: PageTriggerConfig = {}, page?: PageIdentity): PageTrigger {
   const base: PageTrigger = { fact_types: PAGE_FACT_TYPES, tags_match: PAGE_TAGS_MATCH };
   switch (cfg.pageTriggerType) {
+    case "daily-staggered": {
+      if (!page) throw new Error("daily-staggered refresh requires a bank and page identity");
+      // A shared daily cron synchronized every page. Hash creation identity instead, so retries
+      // and concurrent seeders agree without another API call or a shared slot allocator.
+      const minute =
+        createHash("sha256")
+          .update(JSON.stringify([page.bank, ...page.path]))
+          .digest()
+          .readUInt32BE(0) % 1440;
+      return { ...base, refresh_cron: `${minute % 60} ${Math.floor(minute / 60)} * * *` };
+    }
     case "cron":
       return { ...base, refresh_cron: cfg.pageTriggerCron };
     case "manual":

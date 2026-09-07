@@ -12,6 +12,7 @@ import {
   PAGE_MAX_TOKENS,
   pagesFor,
   type PageTrigger,
+  type PageTriggerSource,
 } from "./missions";
 import { pool, semverGte, sleep } from "./util";
 import type { RetainStamp } from "./retain-stamp";
@@ -389,7 +390,7 @@ export class HindsightClient {
    *  `conversation`, `document`, `survey`): an unknown strategy name is not an error server-side,
    *  it just falls back to the bank's own config, so the miss is silent. */
   async configureBank(
-    opts: { reset?: boolean; pageTrigger?: PageTrigger; manage?: boolean } = {}
+    opts: { reset?: boolean; pageTrigger?: PageTriggerSource; manage?: boolean } = {}
   ): Promise<void> {
     if (opts.reset) {
       await this.req("DELETE", this.bankUrl());
@@ -622,7 +623,7 @@ export class HindsightClient {
    * `source_query` re-syncs onto the live page instead of orphaning its synthesized content —
    * which is how `pageScopeRule`'s repo name reaches banks seeded by an earlier version.
    */
-  async seedPages(pageTrigger: PageTrigger = buildPageTrigger()): Promise<void> {
+  async seedPages(pageTrigger: PageTriggerSource = buildPageTrigger()): Promise<void> {
     const pages = pagesFor(this.project ?? this.bank);
     const existing = new Map<string, KnowledgeNode>();
     let roots: KnowledgeNode[];
@@ -641,13 +642,17 @@ export class HindsightClient {
     let created = 0;
     let updated = 0;
     for (const page of pages) {
+      const trigger =
+        typeof pageTrigger === "function"
+          ? pageTrigger({ bank: this.bank, path: [page.name] })
+          : pageTrigger;
       const hit = existing.get(page.name.toLowerCase());
       const body = {
         name: page.name,
         source_query: page.source_query,
         tags: page.tags,
         max_tokens: PAGE_MAX_TOKENS,
-        trigger: pageTrigger,
+        trigger,
       };
       if (!hit) {
         // 409 = another deepen run seeded this name between our tree read and this POST. That is
@@ -665,20 +670,21 @@ export class HindsightClient {
         const sourceDrift = hit.description !== page.source_query;
         // Older servers omit trigger from the tree, so an absent value means unknown rather
         // than drift. Those servers also reject a trigger-only PATCH as an empty update.
-        const triggerDrift =
-          hit.trigger != null && hit.trigger.tags_match !== pageTrigger.tags_match;
+        const triggerDrift = hit.trigger != null && hit.trigger.tags_match !== trigger.tags_match;
         if (!sourceDrift && !triggerDrift) continue;
 
-        // The name IS the match key, so it can't drift; the source query and the trigger can.
-        // The trigger is re-sent when the server reports it drifting, because it is the only way
-        // a policy change reaches a page that already exists. Servers that do not report a page's
-        // trigger leave its policy unknown; source-query drift can still be reconciled safely.
-        const patch: { trigger?: PageTrigger; source_query?: string; tags?: string[] } = {};
+        // Reconcile only tag matching. Sending the complete creation trigger here used to
+        // overwrite a page's manually edited schedule whenever its tag policy drifted.
+        const patch: {
+          trigger?: Pick<PageTrigger, "tags_match">;
+          source_query?: string;
+          tags?: string[];
+        } = {};
         if (sourceDrift) {
           patch.source_query = page.source_query;
           patch.tags = page.tags;
         }
-        if (triggerDrift) patch.trigger = pageTrigger;
+        if (triggerDrift) patch.trigger = { tags_match: trigger.tags_match };
         const r = await this.req(
           "PATCH",
           this.bankUrl(`/knowledge-base/nodes/${encodeURIComponent(hit.id)}`),
@@ -731,7 +737,7 @@ export class HindsightClient {
     stamp?: RetainStamp;
     /** Same refresh policy as the seeded pages — an initiative page is one of them, and used to
      *  carry its own hardcoded copy of this trigger. */
-    pageTrigger?: PageTrigger;
+    pageTrigger?: PageTriggerSource;
   }): Promise<{ page_id: string }> {
     // `/knowledge-base/pages` mints its OWN page id (kp-…); we can't set it. So for a new initiative
     // we create the page first and adopt the server-assigned id — that id is what the return value
@@ -745,7 +751,10 @@ export class HindsightClient {
         source_query: `Summarize the "${args.title}" initiative: what is being built or changed and why, and its current state — drawn from the project's memory.`,
         parent_id: folderId,
         tags: ["knowledge:feature-work"],
-        trigger: args.pageTrigger ?? buildPageTrigger(),
+        trigger:
+          typeof args.pageTrigger === "function"
+            ? args.pageTrigger({ bank: this.bank, path: ["Initiatives", args.title] })
+            : (args.pageTrigger ?? buildPageTrigger()),
       });
       try {
         const j = (await r.json()) as { page_id?: string; id?: string };

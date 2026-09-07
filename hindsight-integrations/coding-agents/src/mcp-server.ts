@@ -39,7 +39,7 @@ export function selectTools(
     : buildKnowledgeTools(client, bankId, {
         repoDir: cwd,
         harness,
-        pageTrigger: buildPageTrigger(cfg),
+        pageTrigger: (page) => buildPageTrigger(cfg, page),
         reflectTimeoutMs: cfg.reflectToolTimeoutMs,
         reflectBudget: cfg.reflectBudget,
         stampFor: () => buildRetainStamp(cfg, { directory: cwd, harness, bankId }),
